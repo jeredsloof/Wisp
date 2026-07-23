@@ -1,26 +1,6 @@
-import { useRef } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
-import type { Mesh } from 'three'
-import './App.css'
-
-function SpinningCube() {
-  const meshRef = useRef<Mesh>(null)
-
-  useFrame((_, delta) => {
-    if (meshRef.current) {
-      meshRef.current.rotation.x += delta * 0.5
-      meshRef.current.rotation.y += delta * 0.8
-    }
-  })
-
-  return (
-    <mesh ref={meshRef}>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color="#aa3bff" />
-    </mesh>
-  )
-}
+import SpinningCube from './components/SpinningCube'
 
 function App() {
   return (
