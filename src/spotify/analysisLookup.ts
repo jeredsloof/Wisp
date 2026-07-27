@@ -1,0 +1,66 @@
+import type { AudioAnalysis, AudioAnalysisInterval, AudioAnalysisSegment } from './types'
+
+function findActiveIndex(items: AudioAnalysisInterval[], positionSec: number): number {
+  if (items.length === 0) return -1
+
+  let lo = 0
+  let hi = items.length - 1
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (items[mid].start <= positionSec) {
+      lo = mid
+    } else {
+      hi = mid - 1
+    }
+  }
+  return items[lo].start <= positionSec ? lo : -1
+}
+
+export function getActiveSegmentIndex(analysis: AudioAnalysis, positionSec: number): number {
+  return findActiveIndex(analysis.segments, positionSec)
+}
+
+export function getActiveBeatIndex(analysis: AudioAnalysis, positionSec: number): number {
+  return findActiveIndex(analysis.beats, positionSec)
+}
+
+export function getActiveBarIndex(analysis: AudioAnalysis, positionSec: number): number {
+  return findActiveIndex(analysis.bars, positionSec)
+}
+
+const EMPTY_PITCHES = new Array<number>(12).fill(0)
+
+/** Pitch-class energy vector for the active segment, lerped toward the next segment. */
+export function getPitchEnergyVector(analysis: AudioAnalysis, positionSec: number): number[] {
+  const index = getActiveSegmentIndex(analysis, positionSec)
+  if (index === -1) return EMPTY_PITCHES
+
+  const segment = analysis.segments[index]
+  const next = analysis.segments[index + 1]
+  if (!next) return segment.pitches
+
+  const t = Math.min(1, (positionSec - segment.start) / segment.duration)
+  return segment.pitches.map((value, i) => value + (next.pitches[i] - value) * t)
+}
+
+/** Segment loudness (dB, roughly -60..0) normalized to a 0..1 scale. */
+export function getNormalizedLoudness(analysis: AudioAnalysis, positionSec: number): number {
+  const index = getActiveSegmentIndex(analysis, positionSec)
+  if (index === -1) return 0
+
+  const segment: AudioAnalysisSegment = analysis.segments[index]
+  const db = Math.max(segment.loudness_start, segment.loudness_max)
+  return Math.min(1, Math.max(0, (db + 60) / 60))
+}
+
+/** Returns the beat that was crossed this frame (start <= currPositionSec, start > prevPositionSec), if any. */
+export function getBeatCrossedThisFrame(
+  analysis: AudioAnalysis,
+  prevPositionSec: number,
+  currPositionSec: number,
+): AudioAnalysisInterval | null {
+  const prevIndex = getActiveBeatIndex(analysis, prevPositionSec)
+  const currIndex = getActiveBeatIndex(analysis, currPositionSec)
+  if (currIndex === -1 || currIndex === prevIndex) return null
+  return analysis.beats[currIndex]
+}
