@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { Color, type BufferGeometry, type Points } from 'three'
 import {
   getActiveBarIndex,
+  getActiveSegmentIndex,
   getBeatCrossedThisFrame,
   getNormalizedLoudness,
   getPitchEnergyVector,
@@ -32,7 +33,8 @@ function buildParticleLayout() {
 
   const tmpColor = new Color()
   for (let g = 0; g < GROUP_COUNT; g++) {
-    tmpColor.setHSL(g / GROUP_COUNT, 0.7, 0.55)
+    const lightness = 0.35 + (g / (GROUP_COUNT - 1)) * 0.5
+    tmpColor.setHSL(0, 0, lightness)
     groupColor[g * 3] = tmpColor.r
     groupColor[g * 3 + 1] = tmpColor.g
     groupColor[g * 3 + 2] = tmpColor.b
@@ -65,6 +67,7 @@ function MusicParticles({ analysis, getPositionMs, isPlaying }: MusicParticlesPr
   const prevPositionSecRef = useRef(0)
   const pulseRef = useRef(0)
   const rotationRef = useRef(0)
+  const energyBufferRef = useRef<number[]>(new Array(GROUP_COUNT).fill(0))
 
   useFrame((_, delta) => {
     const geometry = geometryRef.current
@@ -82,8 +85,9 @@ function MusicParticles({ analysis, getPositionMs, isPlaying }: MusicParticlesPr
     let barPulse = 0
 
     if (hasAnalysis) {
-      energy = getPitchEnergyVector(analysis, positionSec)
-      loudness = getNormalizedLoudness(analysis, positionSec)
+      const segmentIndex = getActiveSegmentIndex(analysis, positionSec)
+      energy = getPitchEnergyVector(analysis, segmentIndex, positionSec, energyBufferRef.current)
+      loudness = getNormalizedLoudness(analysis, segmentIndex)
 
       const crossedBeat = getBeatCrossedThisFrame(analysis, prevPositionSecRef.current, positionSec)
       if (crossedBeat) {
@@ -93,7 +97,9 @@ function MusicParticles({ analysis, getPositionMs, isPlaying }: MusicParticlesPr
       barPulse = barIndex >= 0 ? analysis.bars[barIndex].confidence : 0
     } else {
       const t = performance.now() / 1000
-      energy = new Array(GROUP_COUNT).fill(0).map((_, g) => 0.15 + 0.1 * Math.sin(t * 0.6 + g))
+      const buf = energyBufferRef.current
+      for (let g = 0; g < GROUP_COUNT; g++) buf[g] = 0.15 + 0.1 * Math.sin(t * 0.6 + g)
+      energy = buf
       loudness = 0.25
     }
 

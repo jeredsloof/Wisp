@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { AsciiEffect } from 'three/examples/jsm/effects/AsciiEffect.js'
 
@@ -8,7 +8,10 @@ interface AsciiRendererProps {
   resolution?: number
 }
 
-function AsciiRenderer({ container, characters = ' .:-=+*#%@', resolution = 0.18 }: AsciiRendererProps) {
+const ASCII_FPS = 30
+const ASCII_FRAME_INTERVAL = 1 / ASCII_FPS
+
+function AsciiRenderer({ container, characters = ' .:-=+*#%@', resolution = 0.13 }: AsciiRendererProps) {
   const { gl, scene, camera, size } = useThree()
 
   const effect = useMemo(
@@ -29,7 +32,12 @@ function AsciiRenderer({ container, characters = ' .:-=+*#%@', resolution = 0.18
     effect.setSize(size.width, size.height)
   }, [effect, size])
 
-  useFrame(() => {
+  const accumulatorRef = useRef(0)
+
+  useFrame((_, delta) => {
+    accumulatorRef.current += delta
+    if (accumulatorRef.current < ASCII_FRAME_INTERVAL) return
+    accumulatorRef.current = 0
     effect.render(scene, camera)
   }, 1)
 

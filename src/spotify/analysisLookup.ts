@@ -28,27 +28,35 @@ export function getActiveBarIndex(analysis: AudioAnalysis, positionSec: number):
   return findActiveIndex(analysis.bars, positionSec)
 }
 
-const EMPTY_PITCHES = new Array<number>(12).fill(0)
+/** Pitch-class energy vector for the active segment, lerped toward the next segment. Writes into `out`. */
+export function getPitchEnergyVector(
+  analysis: AudioAnalysis,
+  segmentIndex: number,
+  positionSec: number,
+  out: number[],
+): number[] {
+  if (segmentIndex === -1) {
+    out.fill(0)
+    return out
+  }
 
-/** Pitch-class energy vector for the active segment, lerped toward the next segment. */
-export function getPitchEnergyVector(analysis: AudioAnalysis, positionSec: number): number[] {
-  const index = getActiveSegmentIndex(analysis, positionSec)
-  if (index === -1) return EMPTY_PITCHES
-
-  const segment = analysis.segments[index]
-  const next = analysis.segments[index + 1]
-  if (!next) return segment.pitches
+  const segment = analysis.segments[segmentIndex]
+  const next = analysis.segments[segmentIndex + 1]
+  if (!next) {
+    for (let i = 0; i < 12; i++) out[i] = segment.pitches[i]
+    return out
+  }
 
   const t = Math.min(1, (positionSec - segment.start) / segment.duration)
-  return segment.pitches.map((value, i) => value + (next.pitches[i] - value) * t)
+  for (let i = 0; i < 12; i++) out[i] = segment.pitches[i] + (next.pitches[i] - segment.pitches[i]) * t
+  return out
 }
 
 /** Segment loudness (dB, roughly -60..0) normalized to a 0..1 scale. */
-export function getNormalizedLoudness(analysis: AudioAnalysis, positionSec: number): number {
-  const index = getActiveSegmentIndex(analysis, positionSec)
-  if (index === -1) return 0
+export function getNormalizedLoudness(analysis: AudioAnalysis, segmentIndex: number): number {
+  if (segmentIndex === -1) return 0
 
-  const segment: AudioAnalysisSegment = analysis.segments[index]
+  const segment: AudioAnalysisSegment = analysis.segments[segmentIndex]
   const db = Math.max(segment.loudness_start, segment.loudness_max)
   return Math.min(1, Math.max(0, (db + 60) / 60))
 }
