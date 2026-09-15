@@ -1,34 +1,57 @@
 import { useEffect, useRef, useState } from 'react'
 
+type SourceLabel = { kind: 'file'; name: string } | { kind: 'spotify-tab' } | null
+
+const supportsTabCapture = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia
+
 function WaveformVisualizer() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
+  const fileSourceRef = useRef<MediaElementAudioSourceNode | null>(null)
+  const captureSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const captureStreamRef = useRef<MediaStream | null>(null)
   const objectUrlRef = useRef<string | null>(null)
-  const [fileName, setFileName] = useState<string | null>(null)
+  const [source, setSource] = useState<SourceLabel>(null)
+  const [captureError, setCaptureError] = useState<string | null>(null)
 
-  const ensureAudioGraph = () => {
-    const audio = audioRef.current
-    if (!audio || audioCtxRef.current) return
+  const ensureAudioContext = () => {
+    if (audioCtxRef.current) return audioCtxRef.current
 
     const audioCtx = new AudioContext()
     const analyser = audioCtx.createAnalyser()
     analyser.fftSize = 2048
 
-    const source = audioCtx.createMediaElementSource(audio)
-    source.connect(analyser)
-    analyser.connect(audioCtx.destination)
-
     audioCtxRef.current = audioCtx
     analyserRef.current = analyser
-    sourceRef.current = source
+    return audioCtx
+  }
+
+  const stopCapture = () => {
+    captureSourceRef.current?.disconnect()
+    captureSourceRef.current = null
+    captureStreamRef.current?.getTracks().forEach((track) => track.stop())
+    captureStreamRef.current = null
+  }
+
+  const ensureFileSource = () => {
+    const audio = audioRef.current
+    const audioCtx = ensureAudioContext()
+    if (!audio || fileSourceRef.current) return
+
+    const source = audioCtx.createMediaElementSource(audio)
+    source.connect(analyserRef.current!)
+    analyserRef.current!.connect(audioCtx.destination)
+    fileSourceRef.current = source
   }
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file || !audioRef.current) return
+
+    stopCapture()
+    setCaptureError(null)
 
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current)
@@ -36,9 +59,46 @@ function WaveformVisualizer() {
 
     const url = URL.createObjectURL(file)
     objectUrlRef.current = url
-    setFileName(file.name)
+    setSource({ kind: 'file', name: file.name })
     audioRef.current.src = url
     audioRef.current.play()
+  }
+
+  const startSpotifyCapture = async () => {
+    setCaptureError(null)
+    audioRef.current?.pause()
+
+    try {
+      const audioCtx = ensureAudioContext()
+      await audioCtx.resume()
+
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      const audioTracks = stream.getAudioTracks()
+
+      if (audioTracks.length === 0) {
+        stream.getTracks().forEach((track) => track.stop())
+        setCaptureError('No audio was shared. Pick "This Tab" and check "Share tab audio".')
+        return
+      }
+
+      stream.getVideoTracks().forEach((track) => track.stop())
+      stopCapture()
+
+      const audioOnlyStream = new MediaStream(audioTracks)
+      const captureSource = audioCtx.createMediaStreamSource(audioOnlyStream)
+      captureSource.connect(analyserRef.current!)
+
+      captureSourceRef.current = captureSource
+      captureStreamRef.current = stream
+      setSource({ kind: 'spotify-tab' })
+
+      audioTracks[0].addEventListener('ended', () => {
+        stopCapture()
+        setSource((current) => (current?.kind === 'spotify-tab' ? null : current))
+      })
+    } catch {
+      setCaptureError('Tab audio capture was not permitted, or is unsupported in this browser.')
+    }
   }
 
   useEffect(() => {
@@ -110,6 +170,7 @@ function WaveformVisualizer() {
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
+      stopCapture()
       audioCtxRef.current?.close()
     }
   }, [])
@@ -126,33 +187,64 @@ function WaveformVisualizer() {
           flexDirection: 'column',
           gap: 8,
           alignItems: 'flex-start',
+          maxWidth: 320,
         }}
       >
-        <label
-          style={{
-            color: '#fff',
-            fontFamily: 'system-ui, sans-serif',
-            fontSize: 14,
-            background: 'rgba(255,255,255,0.1)',
-            padding: '6px 10px',
-            borderRadius: 4,
-            cursor: 'pointer',
-          }}
-        >
-          Choose audio file
-          <input
-            type="file"
-            accept="audio/*"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-          />
-        </label>
-        {fileName && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <label
+            style={{
+              color: '#fff',
+              fontFamily: 'system-ui, sans-serif',
+              fontSize: 14,
+              background: 'rgba(255,255,255,0.1)',
+              padding: '6px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}
+          >
+            Choose audio file
+            <input
+              type="file"
+              accept="audio/*"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+          </label>
+          {supportsTabCapture && (
+            <button
+              type="button"
+              onClick={startSpotifyCapture}
+              style={{
+                color: '#fff',
+                fontFamily: 'system-ui, sans-serif',
+                fontSize: 14,
+                background: 'rgba(29,185,84,0.25)',
+                border: '1px solid rgba(29,185,84,0.6)',
+                padding: '6px 10px',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Capture Spotify tab audio
+            </button>
+          )}
+        </div>
+        {source?.kind === 'file' && (
           <span style={{ color: '#9ca3af', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
-            {fileName}
+            {source.name}
           </span>
         )}
-        <audio ref={audioRef} controls onPlay={ensureAudioGraph} />
+        {source?.kind === 'spotify-tab' && (
+          <span style={{ color: '#9ca3af', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
+            Capturing Spotify tab audio — pick "This Tab" with "Share tab audio" checked
+          </span>
+        )}
+        {captureError && (
+          <span style={{ color: '#f87171', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
+            {captureError}
+          </span>
+        )}
+        <audio ref={audioRef} controls onPlay={ensureFileSource} />
       </div>
     </div>
   )
