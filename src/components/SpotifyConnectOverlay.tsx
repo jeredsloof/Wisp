@@ -8,7 +8,6 @@ interface SpotifyConnectOverlayProps {
   deviceId: string | null
   isPlaying: boolean
   playbackError: PlaybackError | null
-  analysisUnavailable: boolean
   onLogin: () => void
 }
 
@@ -31,7 +30,6 @@ function SpotifyConnectOverlay({
   deviceId,
   isPlaying,
   playbackError,
-  analysisUnavailable,
   onLogin,
 }: SpotifyConnectOverlayProps) {
   let message: string | null = null
@@ -48,8 +46,6 @@ function SpotifyConnectOverlay({
     message = 'Loading player…'
   } else if (!isPlaying) {
     message = 'Open Spotify on your phone or desktop and switch playback to "Wisp".'
-  } else if (analysisUnavailable) {
-    message = 'No audio analysis available for this track.'
   }
 
   return (
