@@ -1,10 +1,58 @@
 import { useEffect, useRef, useState } from 'react'
+import type { SpotifyAuthStatus } from '../spotify/useSpotifyAuth'
+import type { PlaybackError } from '../spotify/usePlaybackState'
+import './WaveformVisualizer.css'
 
 type SourceLabel = { kind: 'file'; name: string } | { kind: 'spotify-tab' } | null
+type VisualMode = 'waveform' | 'ascii'
+type AsciiStyle = 'classic' | 'blocks' | 'matrix' | 'binary'
+
+const ASCII_CHARSETS: Record<AsciiStyle, string> = {
+  classic: ' .:-=+*#%@',
+  blocks: ' ░▒▓█',
+  matrix: ' .:+*#@01$&',
+  binary: ' 01',
+}
+
+const ASCII_STYLE_LABELS: Record<AsciiStyle, string> = {
+  classic: 'Classic',
+  blocks: 'Blocks',
+  matrix: 'Matrix',
+  binary: 'Binary',
+}
 
 const supportsTabCapture = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia
 
-function WaveformVisualizer() {
+interface WaveformVisualizerProps {
+  spotifyAuthStatus: SpotifyAuthStatus
+  spotifyAuthErrorMessage: string | null
+  spotifyDeviceId: string | null
+  spotifyIsPlaying: boolean
+  spotifyPlaybackError: PlaybackError | null
+  onSpotifyLogin: () => void
+}
+
+function playbackErrorMessage(error: PlaybackError): string {
+  switch (error.kind) {
+    case 'account_error':
+      return 'Spotify Premium is required for in-browser playback.'
+    case 'authentication_error':
+      return 'Spotify authentication failed. Try reconnecting.'
+    case 'initialization_error':
+      return 'Could not initialize the Spotify player in this browser.'
+    case 'playback_error':
+      return `Playback error: ${error.message}`
+  }
+}
+
+function WaveformVisualizer({
+  spotifyAuthStatus,
+  spotifyAuthErrorMessage,
+  spotifyDeviceId,
+  spotifyIsPlaying,
+  spotifyPlaybackError,
+  onSpotifyLogin,
+}: WaveformVisualizerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -15,6 +63,28 @@ function WaveformVisualizer() {
   const objectUrlRef = useRef<string | null>(null)
   const [source, setSource] = useState<SourceLabel>(null)
   const [captureError, setCaptureError] = useState<string | null>(null)
+  const [mode, setMode] = useState<VisualMode>('waveform')
+  const [asciiStyle, setAsciiStyle] = useState<AsciiStyle>('classic')
+  const [cellSize, setCellSize] = useState(14)
+  const [asciiColor, setAsciiColor] = useState('#39ff14')
+
+  const modeRef = useRef(mode)
+  const asciiStyleRef = useRef(asciiStyle)
+  const cellSizeRef = useRef(cellSize)
+  const asciiColorRef = useRef(asciiColor)
+
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+  useEffect(() => {
+    asciiStyleRef.current = asciiStyle
+  }, [asciiStyle])
+  useEffect(() => {
+    cellSizeRef.current = cellSize
+  }, [cellSize])
+  useEffect(() => {
+    asciiColorRef.current = asciiColor
+  }, [asciiColor])
 
   const ensureAudioContext = () => {
     if (audioCtxRef.current) return audioCtxRef.current
@@ -117,18 +187,12 @@ function WaveformVisualizer() {
 
     let rafId: number
 
-    const draw = () => {
-      rafId = requestAnimationFrame(draw)
-
-      const analyser = analyserRef.current
-      const width = canvas.width
-      const height = canvas.height
-
-      ctx.fillStyle = 'rgb(0, 0, 0)'
-      ctx.fillRect(0, 0, width, height)
-
-      if (!analyser) return
-
+    const drawWaveform = (
+      ctx: CanvasRenderingContext2D,
+      analyser: AnalyserNode,
+      width: number,
+      height: number,
+    ) => {
       const bufferLength = analyser.fftSize
       const dataArray = new Uint8Array(bufferLength)
       analyser.getByteTimeDomainData(dataArray)
@@ -157,6 +221,60 @@ function WaveformVisualizer() {
       ctx.stroke()
     }
 
+    const drawAscii = (
+      ctx: CanvasRenderingContext2D,
+      analyser: AnalyserNode,
+      width: number,
+      height: number,
+    ) => {
+      const cell = Math.max(4, cellSizeRef.current)
+      const charset = ASCII_CHARSETS[asciiStyleRef.current]
+
+      const bufferLength = analyser.frequencyBinCount
+      const freqData = new Uint8Array(bufferLength)
+      analyser.getByteFrequencyData(freqData)
+
+      const cols = Math.ceil(width / cell)
+      const rows = Math.ceil(height / cell)
+
+      ctx.font = `${cell}px monospace`
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = asciiColorRef.current
+
+      for (let c = 0; c < cols; c++) {
+        const binIndex = Math.floor((c / cols) * bufferLength)
+        const amplitude = freqData[binIndex] / 255
+        const barRows = Math.max(1, Math.round(amplitude * rows))
+
+        for (let i = 0; i < barRows; i++) {
+          const row = rows - 1 - i
+          const relative = i / barRows
+          const charIndex = Math.min(charset.length - 1, Math.floor(relative * charset.length))
+          const char = charset[charIndex]
+          ctx.fillText(char, c * cell, row * cell)
+        }
+      }
+    }
+
+    const draw = () => {
+      rafId = requestAnimationFrame(draw)
+
+      const analyser = analyserRef.current
+      const width = canvas.width
+      const height = canvas.height
+
+      ctx.fillStyle = 'rgb(0, 0, 0)'
+      ctx.fillRect(0, 0, width, height)
+
+      if (!analyser) return
+
+      if (modeRef.current === 'ascii') {
+        drawAscii(ctx, analyser, width, height)
+      } else {
+        drawWaveform(ctx, analyser, width, height)
+      }
+    }
+
     draw()
 
     return () => {
@@ -175,76 +293,146 @@ function WaveformVisualizer() {
     }
   }, [])
 
+  let spotifyMessage: string | null = null
+  if (spotifyAuthStatus === 'authenticating') {
+    spotifyMessage = 'Connecting to Spotify…'
+  } else if (spotifyAuthStatus === 'error') {
+    spotifyMessage = spotifyAuthErrorMessage ?? 'Something went wrong connecting to Spotify.'
+  } else if (spotifyPlaybackError) {
+    spotifyMessage = playbackErrorMessage(spotifyPlaybackError)
+  } else if (spotifyAuthStatus === 'ready' && !spotifyDeviceId) {
+    spotifyMessage = 'Loading player…'
+  } else if (spotifyAuthStatus === 'ready' && !spotifyIsPlaying) {
+    spotifyMessage = 'Open Spotify on your phone or desktop and switch playback to "Wisp".'
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000' }}>
       <canvas ref={canvasRef} style={{ display: 'block' }} />
-      <div
-        style={{
-          position: 'fixed',
-          top: 16,
-          left: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          alignItems: 'flex-start',
-          maxWidth: 320,
-        }}
-      >
-        <div style={{ display: 'flex', gap: 8 }}>
-          <label
-            style={{
-              color: '#fff',
-              fontFamily: 'system-ui, sans-serif',
-              fontSize: 14,
-              background: 'rgba(255,255,255,0.1)',
-              padding: '6px 10px',
-              borderRadius: 4,
-              cursor: 'pointer',
-            }}
-          >
-            Choose audio file
-            <input
-              type="file"
-              accept="audio/*"
-              onChange={handleFileChange}
-              style={{ display: 'none' }}
-            />
-          </label>
-          {supportsTabCapture && (
+
+      <div className="menu-panel" style={{ '--accent': asciiColor } as React.CSSProperties}>
+        <div className="menu-panel__header">
+          <span className="menu-panel__dot" />
+          <span className="menu-panel__title">Wisp</span>
+        </div>
+
+        <div className="menu-panel__section">
+          <span className="menu-panel__section-title">Spotify</span>
+          {spotifyAuthStatus === 'logged-out' && (
             <button
               type="button"
-              onClick={startSpotifyCapture}
-              style={{
-                color: '#fff',
-                fontFamily: 'system-ui, sans-serif',
-                fontSize: 14,
-                background: 'rgba(29,185,84,0.25)',
-                border: '1px solid rgba(29,185,84,0.6)',
-                padding: '6px 10px',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
+              className="menu-panel__button menu-panel__button--spotify"
+              onClick={onSpotifyLogin}
             >
-              Capture Spotify tab audio
+              Connect Spotify
             </button>
           )}
+          {spotifyMessage && <p className="menu-panel__status">{spotifyMessage}</p>}
         </div>
-        {source?.kind === 'file' && (
-          <span style={{ color: '#9ca3af', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
-            {source.name}
-          </span>
-        )}
-        {source?.kind === 'spotify-tab' && (
-          <span style={{ color: '#9ca3af', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
-            Capturing Spotify tab audio — pick "This Tab" with "Share tab audio" checked
-          </span>
-        )}
-        {captureError && (
-          <span style={{ color: '#f87171', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
-            {captureError}
-          </span>
-        )}
-        <audio ref={audioRef} controls onPlay={ensureFileSource} />
+
+        <div className="menu-panel__section">
+          <span className="menu-panel__section-title">Audio source</span>
+          <div className="menu-panel__button-row">
+            <label className="menu-panel__button">
+              Choose file
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={handleFileChange}
+                style={{ display: 'none' }}
+              />
+            </label>
+            {supportsTabCapture && (
+              <button
+                type="button"
+                className="menu-panel__button menu-panel__button--accent"
+                onClick={startSpotifyCapture}
+              >
+                Capture tab audio
+              </button>
+            )}
+          </div>
+          {source?.kind === 'file' && <p className="menu-panel__status">{source.name}</p>}
+          {source?.kind === 'spotify-tab' && (
+            <p className="menu-panel__status">
+              Capturing Spotify tab audio — pick "This Tab" with "Share tab audio" checked
+            </p>
+          )}
+          {captureError && <p className="menu-panel__status menu-panel__status--error">{captureError}</p>}
+          <audio
+            ref={audioRef}
+            controls
+            onPlay={ensureFileSource}
+            className="menu-panel__audio"
+            style={{ colorScheme: 'dark' }}
+          />
+        </div>
+
+        <div className="menu-panel__section">
+          <div className="menu-panel__toggle-row">
+            <span className="menu-panel__section-title">ASCII mode</span>
+            <label className="menu-panel__switch">
+              <input
+                type="checkbox"
+                checked={mode === 'ascii'}
+                onChange={() => setMode((m) => (m === 'ascii' ? 'waveform' : 'ascii'))}
+              />
+              <span className="menu-panel__switch-track">
+                <span className="menu-panel__switch-thumb" />
+              </span>
+            </label>
+          </div>
+
+          {mode === 'ascii' && (
+            <>
+              <div className="menu-panel__row">
+                <span className="menu-panel__label">Style</span>
+                <select
+                  className="menu-panel__select"
+                  value={asciiStyle}
+                  onChange={(e) => setAsciiStyle(e.target.value as AsciiStyle)}
+                >
+                  {(Object.keys(ASCII_CHARSETS) as AsciiStyle[]).map((key) => (
+                    <option key={key} value={key}>
+                      {ASCII_STYLE_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+                <p className="menu-panel__preview">{ASCII_CHARSETS[asciiStyle]}</p>
+              </div>
+
+              <div className="menu-panel__row">
+                <span className="menu-panel__label">
+                  Cell size
+                  <span className="menu-panel__value">{cellSize}px</span>
+                </span>
+                <input
+                  className="menu-panel__range"
+                  type="range"
+                  min={6}
+                  max={32}
+                  step={1}
+                  value={cellSize}
+                  onChange={(e) => setCellSize(Number(e.target.value))}
+                  style={{ '--range-fill': `${((cellSize - 6) / (32 - 6)) * 100}%` } as React.CSSProperties}
+                />
+              </div>
+
+              <div className="menu-panel__row">
+                <span className="menu-panel__label">Color</span>
+                <div className="menu-panel__swatch-row">
+                  <input
+                    className="menu-panel__swatch"
+                    type="color"
+                    value={asciiColor}
+                    onChange={(e) => setAsciiColor(e.target.value)}
+                  />
+                  <span className="menu-panel__hex">{asciiColor}</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
